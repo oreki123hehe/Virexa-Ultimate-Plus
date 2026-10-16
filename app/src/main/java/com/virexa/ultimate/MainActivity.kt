@@ -77,21 +77,43 @@ private fun VirexaApp() {
 
     fun startDownload(raw: String) {
         val url = raw.trim()
-        if (!url.startsWith("https://") && !url.startsWith("http://")) { notice = "Tautan tidak valid. Gunakan URL HTTP atau HTTPS."; return }
-        try {
-            val uri = Uri.parse(url)
-            val request = DownloadManager.Request(uri)
-                .setTitle(uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "Virexa media")
-                .setDescription("Diunduh melalui Virexa")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true).setAllowedOverRoaming(false)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, (uri.lastPathSegment ?: "virexa-file").take(120))
-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { request.addRequestHeader("Cookie", it) }
-            request.addRequestHeader("User-Agent", System.getProperty("http.agent") ?: "Mozilla/5.0")
-            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            notice = "Unduhan ditambahkan. Pantau progres di notifikasi atau Downloads."
-            refreshDownloads++
-        } catch (_: Exception) { notice = "Unduhan gagal dimulai. Periksa tautan dan izin sumber." }
+        if (!url.startsWith("https://") && !url.startsWith("http://")) {
+            notice = "Tautan tidak valid. Gunakan URL HTTP atau HTTPS."; return
+        }
+        notice = "Memeriksa sumber media…"
+        Thread {
+            val result = MediaSourceResolver.inspect(url)
+            runOnUiThread {
+                when (result) {
+                    is MediaSourceResolver.Result.Media -> {
+                        try {
+                            val uri = Uri.parse(result.url)
+                            val safeName = result.fileName.replace(Regex("[\\\\/:*?\\\"<>|]"), "_").take(140)
+                            val request = DownloadManager.Request(uri)
+                                .setTitle(safeName)
+                                .setDescription("Media • Virexa")
+                                .setMimeType(result.mimeType)
+                                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                .setAllowedOverMetered(true).setAllowedOverRoaming(false)
+                                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
+                            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { request.addRequestHeader("Cookie", it) }
+                            request.addRequestHeader("User-Agent", System.getProperty("http.agent") ?: "Mozilla/5.0")
+                            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+                            notice = "Unduhan media dimulai: $safeName"
+                            refreshDownloads++
+                        } catch (_: Exception) {
+                            notice = "Unduhan gagal dimulai. Periksa izin, URL, atau akses sumber."
+                        }
+                    }
+                    is MediaSourceResolver.Result.StreamManifest ->
+                        notice = "Sumber streaming ${result.kind} terdeteksi, tetapi belum didukung mesin unduhan ini. DRM tidak dibypass."
+                    is MediaSourceResolver.Result.NotMedia ->
+                        notice = "Tautan ini tampaknya halaman web, bukan berkas media langsung. Buka halaman di Browser dan pilih media yang terdeteksi."
+                    is MediaSourceResolver.Result.Failure ->
+                        notice = "Sumber tidak bisa diperiksa: ${result.reason}"
+                }
+            }
+        }.start()
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Violet, secondary = Mint, background = Ink, surface = Panel, onSurface = Color.White)) {
