@@ -52,7 +52,7 @@ internal object MediaSourceResolver {
             if (!mediaMime && !mediaExt) return Result.NotMedia
             val ext = mimeExt ?: pathExt ?: "bin"
             val name = (headerName?.takeIf { it.isNotBlank() } ?: pathName?.takeIf { it.contains('.') } ?: "virexa-media.$ext")
-                .replace(Regex("[\\\\/:*?\\"<>|]"), "_").take(140).ifBlank { "virexa-media.$ext" }
+                .replace(Regex("""[\\/:*?"<>|]"""), "_").take(140).ifBlank { "virexa-media.$ext" }
             Result.Media(finalUrl, name, mime.ifBlank { "application/octet-stream" }, ext)
         }
     } catch (e: Exception) {
