@@ -198,32 +198,93 @@ private fun FeatureRow(icon: androidx.compose.ui.graphics.vector.ImageVector, ti
 
 @Composable
 private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: (String) -> Unit) {
-    var activeUrl by remember { mutableStateOf(url) }
-    var go by remember { mutableIntStateOf(0) }
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    var pageTitle by remember { mutableStateOf("Ready to browse") }
+    var loading by remember { mutableStateOf(false) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+
+    fun normalizedAddress(input: String): String {
+        val value = input.trim()
+        if (value.isEmpty()) return "https://www.google.com"
+        if (value.contains(" ") || (!value.contains(".") && !value.startsWith("http"))) {
+            return "https://www.google.com/search?q=" + Uri.encode(value)
+        }
+        return if (value.startsWith("http://") || value.startsWith("https://")) value else "https://$value"
+    }
+
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
-            value = url, onValueChange = onUrlChange, modifier = Modifier.fillMaxWidth(),
-            singleLine = true, label = { Text("Website address") },
+            value = url,
+            onValueChange = onUrlChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("Search or enter website") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            trailingIcon = { IconButton(onClick = { activeUrl = url; go++ }) { Icon(Icons.Default.ArrowForward, "Go") } }
+            trailingIcon = {
+                IconButton(onClick = {
+                    val target = normalizedAddress(url)
+                    onUrlChange(target)
+                    webView?.loadUrl(target) ?: run { reloadKey++ }
+                }) { Icon(Icons.Default.Search, "Search or open") }
+            }
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { activeUrl = url; go++ }, modifier = Modifier.weight(1f)) { Text("Open page") }
-            OutlinedButton(onClick = { onDownload(url) }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Download, null); Spacer(Modifier.width(4.dp)); Text("Download URL") }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }, enabled = webView?.canGoBack() == true) {
+                Icon(Icons.Default.ArrowBack, "Back")
+            }
+            IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Reload") }
+            IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }, enabled = webView?.canGoForward() == true) {
+                Icon(Icons.Default.ArrowForward, "Forward")
+            }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = {
+                if (url.isNotBlank()) onDownload(normalizedAddress(url))
+            }, enabled = url.isNotBlank()) {
+                Icon(Icons.Default.Download, null)
+                Spacer(Modifier.width(4.dp))
+                Text("Send to downloads")
+            }
         }
-        key(go) {
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
+        Text(pageTitle, style = MaterialTheme.typography.labelSmall, color = Muted, maxLines = 1)
+        key(reloadKey) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        webViewClient = WebViewClient()
-                        webChromeClient = WebChromeClient()
-                        settings.javaScriptEnabled = false
-                        settings.domStorageEnabled = false
-                        loadUrl(if (activeUrl.startsWith("http://") || activeUrl.startsWith("https://")) activeUrl else "https://$activeUrl")
+                        webView = this
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
+                                loading = true
+                                pageTitle = pageUrl ?: "Loading…"
+                            }
+                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                                loading = false
+                                pageTitle = view?.title?.takeIf { it.isNotBlank() } ?: pageUrl ?: "Page loaded"
+                                if (!pageUrl.isNullOrBlank()) onUrlChange(pageUrl)
+                            }
+                        }
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onReceivedTitle(view: WebView?, title: String?) {
+                                if (!title.isNullOrBlank()) pageTitle = title
+                            }
+                        }
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        settings.setSupportMultipleWindows(false)
+                        setDownloadListener { downloadUrl, _, _, _, _ ->
+                            if (!downloadUrl.isNullOrBlank() &&
+                                (downloadUrl.startsWith("https://") || downloadUrl.startsWith("http://"))) {
+                                onDownload(downloadUrl)
+                            }
+                        }
+                        loadUrl(normalizedAddress(url))
                     }
                 },
-                update = { }
+                update = { view ->
+                    webView = view
+                }
             )
         }
     }
