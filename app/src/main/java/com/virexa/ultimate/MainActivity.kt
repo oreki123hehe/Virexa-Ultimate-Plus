@@ -235,13 +235,24 @@ private fun BrowserPage(address: String, tabCount: Int, onNewTab: () -> Unit, on
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(v: WebView?, url: String?, favicon: android.graphics.Bitmap?) { loading = true; if (!url.isNullOrBlank()) { title = url; field = url; onAddress(url) } }
+                    // Detect common media requests while the page is loading, including stream manifests.
+                    override fun shouldInterceptRequest(v: WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
+                        val url = request?.url?.toString().orEmpty()
+                        val path = runCatching { Uri.parse(url).path.orEmpty().lowercase() }.getOrDefault("")
+                        val extension = path.substringAfterLast('/', "").substringAfterLast('.', "")
+                        if ((url.startsWith("https://") || url.startsWith("http://")) &&
+                            extension in setOf("mp4", "webm", "m4v", "mov", "3gp", "mkv", "mp3", "m4a", "aac", "ogg", "wav", "flac", "m3u8", "mpd")) {
+                            v?.post { if (!detected.contains(url)) detected = (detected + url).takeLast(30) }
+                        }
+                        return super.shouldInterceptRequest(v, request)
+                    }
+                    override fun onPageStarted(v: WebView?, url: String?, favicon: android.graphics.Bitmap?) { loading = true; detected = emptyList(); if (!url.isNullOrBlank()) { title = url; field = url; onAddress(url) } }
                     override fun onPageFinished(v: WebView?, url: String?) {
                         loading = false
                         title = v?.title?.takeIf { it.isNotBlank() } ?: url ?: "Halaman"
                         if (!url.isNullOrBlank()) { field = url; onAddress(url); onVisited(url) }
                         v?.evaluateJavascript("""(function(){var a=[];document.querySelectorAll('video,audio,video source,audio source').forEach(function(e){var u=e.currentSrc||e.src||e.getAttribute('src');if(u)a.push(u)});document.querySelectorAll('a[href]').forEach(function(e){var u=e.href||'';if(/\.(mp4|webm|m4v|mp3|m4a|aac|ogg|wav)(\?|#|$)/i.test(u))a.push(u)});return JSON.stringify([...new Set(a)].filter(function(u){return /^https?:/i.test(u)}).slice(0,20));})()""") { raw ->
-                            try { val parsed = JSONTokener(raw).nextValue(); val array = JSONArray(parsed as? String ?: "[]"); detected = (0 until array.length()).mapNotNull { array.optString(it).takeIf { u -> u.startsWith("http://") || u.startsWith("https://") } }.distinct() }
+                            try { val parsed = JSONTokener(raw).nextValue(); val array = JSONArray(parsed as? String ?: "[]"); detected = (detected + (0 until array.length()).mapNotNull { array.optString(it).takeIf { u -> u.startsWith("http://") || u.startsWith("https://") } }).distinct().takeLast(30) }
                             catch (_: Exception) { detected = emptyList() }
                         }
                     }
