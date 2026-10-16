@@ -83,7 +83,7 @@ private fun VirexaApp() {
         notice = "Memeriksa sumber media…"
         Thread {
             val result = MediaSourceResolver.inspect(url)
-            runOnUiThread {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
                 when (result) {
                     is MediaSourceResolver.Result.Media -> {
                         try {
