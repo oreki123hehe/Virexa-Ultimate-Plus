@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -35,10 +36,11 @@ import androidx.media3.ui.PlayerView
 import org.json.JSONArray
 import org.json.JSONTokener
 
-private val Ink = Color(0xFF0C0B14)
-private val Panel = Color(0xFF191725)
-private val Violet = Color(0xFF9A78FF)
-private val Muted = Color(0xFFB9B5C9)
+private val Ink = Color(0xFF0B0912)
+private val Panel = Color(0xFF191525)
+private val Violet = Color(0xFFAA8CFF)
+private val Mint = Color(0xFF67E2C5)
+private val Muted = Color(0xFFBDB6CF)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,109 +49,80 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Page(val title: String) {
-    Home("Home"), Browser("Browser"), Downloads("Downloads"), Player("Player"), Library("Library"), Settings("Settings")
+private enum class Page(val label: String) { Home("Home"), Browser("Browser"), Downloads("Downloads"), Player("Player"), Library("Library"), Settings("Settings") }
+
+private fun normalizeAddress(input: String): String {
+    val value = input.trim()
+    if (value.isEmpty()) return "https://www.google.com"
+    if (value.contains(" ") || (!value.contains(".") && !value.startsWith("http"))) return "https://www.google.com/search?q=" + Uri.encode(value)
+    return if (value.startsWith("http://") || value.startsWith("https://")) value else "https://$value"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VirexaApp() {
-    var page by remember { mutableStateOf(Page.Home) }
     val context = LocalContext.current
-    var downloadUrl by remember { mutableStateOf("") }
-    var browserUrl by remember { mutableStateOf("https://example.com") }
-    var message by remember { mutableStateOf("Your multimedia space is ready.") }
-    var selectedMedia by remember { mutableStateOf<Uri?>(null) }
-    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            selectedMedia = uri
-            page = Page.Player
-        }
+    val prefs = remember { context.getSharedPreferences("virexa", Context.MODE_PRIVATE) }
+    var page by remember { mutableStateOf(Page.Home) }
+    var browserAddress by remember { mutableStateOf("https://www.google.com") }
+    var downloadAddress by remember { mutableStateOf("") }
+    var notice by remember { mutableStateOf("Selamat datang di Virexa.") }
+    var chosenMedia by remember { mutableStateOf<Uri?>(null) }
+    var refreshDownloads by remember { mutableIntStateOf(0) }
+    val tabs = remember { mutableStateListOf("https://www.google.com") }
+    var tabIndex by remember { mutableIntStateOf(0) }
+    val bookmarks = remember { mutableStateListOf<String>().apply { addAll(prefs.getStringSet("bookmarks", emptySet()) ?: emptySet()) } }
+    val history = remember { mutableStateListOf<String>().apply { addAll(prefs.getString("history", "")?.split("\n")?.filter { it.isNotBlank() } ?: emptyList()) } }
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> if (uri != null) { chosenMedia = uri; page = Page.Player } }
+
+    fun startDownload(raw: String) {
+        val url = raw.trim()
+        if (!url.startsWith("https://") && !url.startsWith("http://")) { notice = "Tautan tidak valid. Gunakan URL HTTP atau HTTPS."; return }
+        try {
+            val uri = Uri.parse(url)
+            val request = DownloadManager.Request(uri)
+                .setTitle(uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "Virexa media")
+                .setDescription("Diunduh melalui Virexa")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setAllowedOverMetered(true).setAllowedOverRoaming(false)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, (uri.lastPathSegment ?: "virexa-file").take(120))
+            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { request.addRequestHeader("Cookie", it) }
+            request.addRequestHeader("User-Agent", System.getProperty("http.agent") ?: "Mozilla/5.0")
+            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            notice = "Unduhan ditambahkan. Pantau progres di notifikasi atau Downloads."
+            refreshDownloads++
+        } catch (_: Exception) { notice = "Unduhan gagal dimulai. Periksa tautan dan izin sumber." }
     }
 
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Violet,
-            onPrimary = Color.White,
-            background = Ink,
-            surface = Panel,
-            onSurface = Color(0xFFF5F2FF),
-            secondary = Color(0xFF67DCC5)
-        )
-    ) {
-        Scaffold(
-            containerColor = Ink,
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text("VIREXA", style = MaterialTheme.typography.titleLarge, color = Color.White)
-                            Text("ULTIMATE+", style = MaterialTheme.typography.labelSmall, color = Violet)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink)
-                )
-            },
-            bottomBar = {
-                NavigationBar(containerColor = Panel) {
-                    val items = listOf(Page.Home, Page.Browser, Page.Downloads, Page.Player, Page.Library)
-                    val icons = listOf(Icons.Default.Home, Icons.Default.Public, Icons.Default.Download, Icons.Default.PlayCircle, Icons.Default.Folder)
-                    items.forEachIndexed { index, item ->
-                        NavigationBarItem(
-                            selected = page == item,
-                            onClick = { page = item },
-                            icon = { Icon(icons[index], contentDescription = item.title) },
-                            label = { Text(item.title) },
-                            colors = NavigationBarItemDefaults.colors(selectedIconColor = Violet, indicatorColor = Color(0xFF30264D))
-                        )
-                    }
+    MaterialTheme(colorScheme = darkColorScheme(primary = Violet, secondary = Mint, background = Ink, surface = Panel, onSurface = Color.White)) {
+        Scaffold(containerColor = Ink, topBar = {
+            TopAppBar(title = { Column { Text("VIREXA", color = Color.White, style = MaterialTheme.typography.titleLarge); Text("ULTIMATE+", color = Violet, style = MaterialTheme.typography.labelSmall) } },
+                actions = { IconButton(onClick = { page = Page.Settings }) { Icon(Icons.Default.Settings, "Pengaturan", tint = Muted) } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink))
+        }, bottomBar = {
+            NavigationBar(containerColor = Panel) {
+                listOf(Page.Home, Page.Browser, Page.Downloads, Page.Player, Page.Library).forEach { item ->
+                    val icon = when (item) { Page.Home -> Icons.Default.Home; Page.Browser -> Icons.Default.Public; Page.Downloads -> Icons.Default.Download; Page.Player -> Icons.Default.PlayCircle; else -> Icons.Default.Folder }
+                    NavigationBarItem(selected = page == item, onClick = { page = item }, icon = { Icon(icon, item.label) }, label = { Text(item.label) },
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = Violet, indicatorColor = Color(0xFF30264D)))
                 }
             }
-        ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+        }) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
                 when (page) {
-                    Page.Home -> HomePage(
-                        onOpen = { page = it },
-                        onPickMedia = { mediaPicker.launch("*/*") },
-                        message = message
-                    )
+                    Page.Home -> HomePage(notice, { page = it }, { mediaPicker.launch("*/*") }, { browserAddress = normalizeAddress(it); tabs[tabIndex] = browserAddress; page = Page.Browser }, bookmarks)
                     Page.Browser -> BrowserPage(
-                        url = browserUrl,
-                        onUrlChange = { browserUrl = it },
-                        onDownload = { url ->
-                            downloadUrl = url
-                            page = Page.Downloads
-                        }
+                        address = tabs.getOrElse(tabIndex) { browserAddress }, tabCount = tabs.size,
+                        onNewTab = { if (tabs.size < 8) { tabs.add("https://www.google.com"); tabIndex = tabs.lastIndex; browserAddress = tabs[tabIndex] } else notice = "Maksimal 8 tab." },
+                        onAddress = { browserAddress = it; tabs[tabIndex] = it },
+                        onDownload = { downloadAddress = it; startDownload(it) },
+                        onVisited = { url -> if (url.startsWith("http")) { history.remove(url); history.add(0, url); while (history.size > 100) history.removeAt(history.lastIndex); prefs.edit().putString("history", history.joinToString("\n")).apply() } },
+                        onBookmark = { url -> if (!bookmarks.contains(url)) { bookmarks.add(url); prefs.edit().putStringSet("bookmarks", bookmarks.toSet()).apply(); notice = "Bookmark disimpan." } else notice = "Bookmark sudah tersimpan." }
                     )
-                    Page.Downloads -> DownloadsPage(
-                        url = downloadUrl,
-                        onUrlChange = { downloadUrl = it },
-                        onDownload = { url ->
-                            val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
-                            try {
-                                val parsedUri = Uri.parse(normalized)
-                                val request = DownloadManager.Request(parsedUri)
-                                    .setTitle(parsedUri.lastPathSegment ?: "Virexa download")
-                                    .setDescription("Downloading with Virexa")
-                                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                    .setAllowedOverMetered(true)
-                                    .setAllowedOverRoaming(false)
-                                val cookie = CookieManager.getInstance().getCookie(normalized)
-                                if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
-                                request.addRequestHeader("User-Agent", System.getProperty("http.agent") ?: "Mozilla/5.0")
-                                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, parsedUri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "virexa-download")
-                                val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                                manager.enqueue(request)
-                                message = "Download added. Check Android notifications for progress."
-                            } catch (e: Exception) {
-                                message = "Could not start download. Check the URL and try again."
-                            }
-                        },
-                        message = message
-                    )
-                    Page.Player -> PlayerPage(uri = selectedMedia, onPick = { mediaPicker.launch("video/*") }, context = context)
-                    Page.Library -> LibraryPage(onPickVideo = { mediaPicker.launch("video/*") }, onPickAudio = { mediaPicker.launch("audio/*") })
-                    Page.Settings -> SettingsPage()
+                    Page.Downloads -> DownloadsPage(downloadAddress, { downloadAddress = it }, { startDownload(it) }, notice, refreshDownloads)
+                    Page.Player -> PlayerPage(chosenMedia, { mediaPicker.launch("*/*") }, context)
+                    Page.Library -> LibraryPage({ mediaPicker.launch("video/*") }, { mediaPicker.launch("audio/*") }, { mediaPicker.launch("*/*") })
+                    Page.Settings -> SettingsPage(bookmarks.size, history.size, { history.clear(); prefs.edit().remove("history").apply(); notice = "Riwayat dihapus." })
                 }
             }
         }
@@ -157,239 +130,195 @@ private fun VirexaApp() {
 }
 
 @Composable
-private fun HomePage(onOpen: (Page) -> Unit, onPickMedia: () -> Unit, message: String) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+private fun HomePage(notice: String, onOpen: (Page) -> Unit, onPick: () -> Unit, onSearch: (String) -> Unit, bookmarks: List<String>) {
+    var query by remember { mutableStateOf("") }
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(24.dp)) {
-                Column(Modifier.padding(20.dp)) {
-                    Text("Everything you love, in one place.", style = MaterialTheme.typography.headlineSmall, color = Color.White)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Browse the web, manage downloads, and play media stored on your device.", color = Muted)
-                    Spacer(Modifier.height(18.dp))
-                    Button(onClick = { onOpen(Page.Browser) }, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Explore, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open browser")
-                    }
-                    Text(message, style = MaterialTheme.typography.bodySmall, color = Muted)
+                Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                    Text("Your multimedia, one place.", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                    Text("Jelajahi web, deteksi media yang tersedia, unduh berkas, dan putar koleksi lokal.", color = Muted)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Cari atau alamat situs") },
+                        trailingIcon = { IconButton(onClick = { onSearch(query) }) { Icon(Icons.Default.Search, "Cari") } })
+                    Button(onClick = { onSearch(query) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Explore, null); Spacer(Modifier.width(8.dp)); Text("Jelajahi web") }
+                    Text(notice, color = Mint, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
-        item { Text("QUICK ACCESS", style = MaterialTheme.typography.labelLarge, color = Violet) }
-        item { FeatureRow(Icons.Default.Download, "Smart Downloader", "Download files from direct links that permit access") { onOpen(Page.Downloads) } }
-        item { FeatureRow(Icons.Default.PlayCircle, "Media Player", "Play a video or audio file from your device") { onPickMedia() } }
-        item { FeatureRow(Icons.Default.Folder, "Media Library", "Open local video and audio files") { onOpen(Page.Library) } }
-        item { FeatureRow(Icons.Default.Settings, "Preferences", "App information and privacy-minded defaults") { onOpen(Page.Settings) } }
-        item {
-            Text("Downloads are supported for direct URLs and sources that authorize downloading. Virexa does not bypass DRM or access restrictions.", color = Muted, style = MaterialTheme.typography.bodySmall)
-        }
+        item { Text("FITUR UTAMA", color = Violet, style = MaterialTheme.typography.labelLarge) }
+        item { FeatureRow(Icons.Default.Public, "Browser multimedia", "Tab, bookmark, riwayat, dan deteksi media") { onOpen(Page.Browser) } }
+        item { FeatureRow(Icons.Default.Download, "Download manager", "Unduh tautan langsung dan lihat progres") { onOpen(Page.Downloads) } }
+        item { FeatureRow(Icons.Default.PlayCircle, "Pemutar media", "Putar audio/video dari perangkat") { onPick() } }
+        item { FeatureRow(Icons.Default.Folder, "Pustaka media", "Buka koleksi audio dan video lokal") { onOpen(Page.Library) } }
+        if (bookmarks.isNotEmpty()) item { Text("BOOKMARK TERSIMPAN: " + bookmarks.size, color = Violet) }
+        item { Text("Deteksi bergantung pada cara situs menyajikan media. DRM dan pembatasan akses tidak dibypass.", color = Muted, style = MaterialTheme.typography.bodySmall) }
+        item { Text("Iklan belum aktif; perlu integrasi SDK dan persetujuan jaringan iklan.", color = Muted, style = MaterialTheme.typography.bodySmall) }
     }
 }
 
 @Composable
 private fun FeatureRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFF30264D)) {
-                Icon(icon, null, tint = Violet, modifier = Modifier.padding(12.dp).size(25.dp))
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Muted)
-            }
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(13.dp), color = Color(0xFF30264D)) { Icon(icon, null, tint = Violet, modifier = Modifier.padding(11.dp).size(24.dp)) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.titleMedium); Text(subtitle, color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
             Icon(Icons.Default.ChevronRight, null, tint = Muted)
         }
     }
 }
 
 @Composable
-private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: (String) -> Unit) {
-    var webView by remember { mutableStateOf<WebView?>(null) }
-    var pageTitle by remember { mutableStateOf("Ready to browse") }
+private fun BrowserPage(address: String, tabCount: Int, onNewTab: () -> Unit, onAddress: (String) -> Unit, onDownload: (String) -> Unit, onVisited: (String) -> Unit, onBookmark: (String) -> Unit) {
+    var field by remember(address) { mutableStateOf(address) }
+    var view by remember { mutableStateOf<WebView?>(null) }
+    var title by remember { mutableStateOf("Browser siap") }
     var loading by remember { mutableStateOf(false) }
-    var reloadKey by remember { mutableIntStateOf(0) }
-    var detectedMedia by remember { mutableStateOf(listOf<String>()) }
-
-    fun normalizedAddress(input: String): String {
-        val value = input.trim()
-        if (value.isEmpty()) return "https://www.google.com"
-        if (value.contains(" ") || (!value.contains(".") && !value.startsWith("http"))) {
-            return "https://www.google.com/search?q=" + Uri.encode(value)
+    var detected by remember { mutableStateOf(listOf<String>()) }
+    Column(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(field, { field = it }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("Cari atau URL") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                trailingIcon = { IconButton(onClick = { val u = normalizeAddress(field); field = u; onAddress(u); view?.loadUrl(u) }) { Icon(Icons.Default.Search, "Buka") } })
+            IconButton(onClick = onNewTab) { Icon(Icons.Default.Add, "Tab baru ($tabCount)") }
         }
-        return if (value.startsWith("http://") || value.startsWith("https://")) value else "https://$value"
-    }
-
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = url,
-            onValueChange = onUrlChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            label = { Text("Search or enter website") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            trailingIcon = {
-                IconButton(onClick = {
-                    val target = normalizedAddress(url)
-                    onUrlChange(target)
-                    webView?.loadUrl(target) ?: run { reloadKey++ }
-                }) { Icon(Icons.Default.Search, "Search or open") }
-            }
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }, enabled = webView?.canGoBack() == true) {
-                Icon(Icons.Default.ArrowBack, "Back")
-            }
-            IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Reload") }
-            IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }, enabled = webView?.canGoForward() == true) {
-                Icon(Icons.Default.ArrowForward, "Forward")
-            }
-            Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = {
-                if (url.isNotBlank()) onDownload(normalizedAddress(url))
-            }, enabled = url.isNotBlank()) {
-                Icon(Icons.Default.Download, null)
-                Spacer(Modifier.width(4.dp))
-                Text("Send to downloads")
-            }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+            IconButton(onClick = { if (view?.canGoBack() == true) view?.goBack() }, enabled = view?.canGoBack() == true) { Icon(Icons.Default.ArrowBack, "Kembali") }
+            IconButton(onClick = { view?.reload() }) { Icon(Icons.Default.Refresh, "Muat ulang") }
+            IconButton(onClick = { if (view?.canGoForward() == true) view?.goForward() }, enabled = view?.canGoForward() == true) { Icon(Icons.Default.ArrowForward, "Maju") }
+            IconButton(onClick = { onBookmark(field) }) { Icon(Icons.Default.BookmarkAdd, "Bookmark") }
+            IconButton(onClick = { onDownload(field) }) { Icon(Icons.Default.Download, "Unduh URL") }
         }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
-        Text(pageTitle, style = MaterialTheme.typography.labelSmall, color = Muted, maxLines = 1)
-        if (detectedMedia.isNotEmpty()) {
-            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)) {
-                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("MEDIA YANG TERDETEKSI (${detectedMedia.size})", color = Violet, style = MaterialTheme.typography.labelMedium)
-                    detectedMedia.take(5).forEachIndexed { index, mediaUrl ->
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(Uri.parse(mediaUrl).lastPathSegment ?: "Media ${index + 1}", color = Muted, modifier = Modifier.weight(1f), maxLines = 1)
-                            TextButton(onClick = { onDownload(mediaUrl) }) { Text("Unduh") }
-                        }
+        Text(title, color = Muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        if (detected.isNotEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(12.dp)) {
+            Column(Modifier.fillMaxWidth().padding(8.dp)) {
+                Text("MEDIA TERDETEKSI (" + detected.size + ")", color = Mint, style = MaterialTheme.typography.labelMedium)
+                detected.take(4).forEach { media ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(Uri.parse(media).lastPathSegment ?: "Media", color = Muted, modifier = Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { onDownload(media) }) { Text("Unduh") }
                     }
                 }
             }
         }
-        key(reloadKey) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        webView = this
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
-                                loading = true
-                                pageTitle = pageUrl ?: "Loading…"
-                            }
-                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                                loading = false
-                                pageTitle = view?.title?.takeIf { it.isNotBlank() } ?: pageUrl ?: "Page loaded"
-                                if (!pageUrl.isNullOrBlank()) onUrlChange(pageUrl)
-                                // Detect media URLs exposed by the page itself; this does not bypass DRM.
-                                view?.evaluateJavascript(
-                                    """(function(){var a=[];document.querySelectorAll('video,audio,video source,audio source').forEach(function(e){var u=e.currentSrc||e.src||e.getAttribute('src');if(u)a.push(u)});document.querySelectorAll('a[href]').forEach(function(e){var u=e.href||'';if(/\.(mp4|webm|m4v|mp3|m4a|aac|ogg|wav)(\?|#|$)/i.test(u))a.push(u)});return JSON.stringify([...new Set(a)].filter(function(u){return /^https?:/i.test(u)}).slice(0,20));})()"""
-                                ) { raw ->
-                                    try {
-                                        val parsed = JSONTokener(raw).nextValue()
-                                        val array = JSONArray(parsed as? String ?: "[]")
-                                        detectedMedia = (0 until array.length()).mapNotNull { array.optString(it).takeIf { value -> value.startsWith("http://") || value.startsWith("https://") } }.distinct()
-                                    } catch (_: Exception) {
-                                        detectedMedia = emptyList()
-                                    }
-                                }
-                            }
+        AndroidView(Modifier.fillMaxSize(), factory = { ctx ->
+            WebView(ctx).apply {
+                view = this
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = true
+                settings.javaScriptCanOpenWindowsAutomatically = false
+                settings.setSupportMultipleWindows(false)
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(v: WebView?, url: String?, favicon: android.graphics.Bitmap?) { loading = true; if (!url.isNullOrBlank()) { title = url; field = url; onAddress(url) } }
+                    override fun onPageFinished(v: WebView?, url: String?) {
+                        loading = false
+                        title = v?.title?.takeIf { it.isNotBlank() } ?: url ?: "Halaman"
+                        if (!url.isNullOrBlank()) { field = url; onAddress(url); onVisited(url) }
+                        v?.evaluateJavascript("""(function(){var a=[];document.querySelectorAll('video,audio,video source,audio source').forEach(function(e){var u=e.currentSrc||e.src||e.getAttribute('src');if(u)a.push(u)});document.querySelectorAll('a[href]').forEach(function(e){var u=e.href||'';if(/\.(mp4|webm|m4v|mp3|m4a|aac|ogg|wav)(\?|#|$)/i.test(u))a.push(u)});return JSON.stringify([...new Set(a)].filter(function(u){return /^https?:/i.test(u)}).slice(0,20));})()""") { raw ->
+                            try { val parsed = JSONTokener(raw).nextValue(); val array = JSONArray(parsed as? String ?: "[]"); detected = (0 until array.length()).mapNotNull { array.optString(it).takeIf { u -> u.startsWith("http://") || u.startsWith("https://") } }.distinct() }
+                            catch (_: Exception) { detected = emptyList() }
                         }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onReceivedTitle(view: WebView?, title: String?) {
-                                if (!title.isNullOrBlank()) pageTitle = title
-                            }
-                        }
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.mediaPlaybackRequiresUserGesture = false
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        settings.javaScriptCanOpenWindowsAutomatically = false
-                        settings.setSupportMultipleWindows(false)
-                        setDownloadListener { downloadUrl, _, _, _, _ ->
-                            if (!downloadUrl.isNullOrBlank() &&
-                                (downloadUrl.startsWith("https://") || downloadUrl.startsWith("http://"))) {
-                                onDownload(downloadUrl)
-                            }
-                        }
-                        loadUrl(normalizedAddress(url))
                     }
-                },
-                update = { view ->
-                    webView = view
                 }
-            )
-        }
+                webChromeClient = object : WebChromeClient() { override fun onReceivedTitle(v: WebView?, newTitle: String?) { if (!newTitle.isNullOrBlank()) title = newTitle } }
+                setDownloadListener { url, _, _, _, _ -> if (!url.isNullOrBlank()) onDownload(url) }
+                loadUrl(normalizeAddress(address))
+            }
+        }, update = { view = it })
     }
 }
 
+private data class DownloadRow(val id: Long, val title: String, val status: String, val done: Long, val total: Long)
+private fun formatBytes(bytes: Long): String = if (bytes < 1024) "$bytes B" else if (bytes < 1024 * 1024) "${bytes / 1024} KB" else String.format("%.1f MB", bytes / (1024f * 1024f))
+
 @Composable
-private fun DownloadsPage(url: String, onUrlChange: (String) -> Unit, onDownload: (String) -> Unit, message: String) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("DOWNLOAD MANAGER", style = MaterialTheme.typography.labelLarge, color = Violet)
-        Text("Start a download from a direct file URL. Android manages the transfer and completion notification.", color = Muted)
-        OutlinedTextField(value = url, onValueChange = onUrlChange, modifier = Modifier.fillMaxWidth(), label = { Text("Direct download URL") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-        Button(onClick = { if (url.isNotBlank()) onDownload(url) }, modifier = Modifier.fillMaxWidth(), enabled = url.startsWith("https://") || url.startsWith("http://")) {
-            Icon(Icons.Default.Download, null); Spacer(Modifier.width(8.dp)); Text("Start download")
-        }
-        Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Info, null, tint = Violet)
-                Spacer(Modifier.width(10.dp))
-                Text(message, color = Muted)
+private fun DownloadsPage(url: String, onUrl: (String) -> Unit, onDownload: (String) -> Unit, notice: String, refreshKey: Int) {
+    val context = LocalContext.current
+    var records by remember { mutableStateOf(listOf<DownloadRow>()) }
+    LaunchedEffect(refreshKey) {
+        val list = mutableListOf<DownloadRow>()
+        try {
+            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val cursor = manager.query(DownloadManager.Query())
+            cursor.use {
+                val idCol = it.getColumnIndex(DownloadManager.COLUMN_ID)
+                val titleCol = it.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                val statusCol = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                val totalCol = it.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                val doneCol = it.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                while (it.moveToNext()) {
+                    val total = it.getLong(totalCol); val done = it.getLong(doneCol)
+                    val status = when (it.getInt(statusCol)) {
+                        DownloadManager.STATUS_SUCCESSFUL -> "Selesai"; DownloadManager.STATUS_FAILED -> "Gagal"; DownloadManager.STATUS_RUNNING -> "Berjalan"; DownloadManager.STATUS_PAUSED -> "Dijeda"; else -> "Menunggu"
+                    }
+                    list.add(DownloadRow(it.getLong(idCol), it.getString(titleCol) ?: "Unduhan", status, done, total))
+                }
+            }
+        } catch (_: Exception) { }
+        records = list.reversed()
+    }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("DOWNLOAD MANAGER", color = Violet, style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(url, onUrl, modifier = Modifier.fillMaxWidth(), label = { Text("Tautan langsung HTTP/HTTPS") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+        Button(onClick = { onDownload(url) }, enabled = url.startsWith("https://") || url.startsWith("http://"), modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Download, null); Spacer(Modifier.width(8.dp)); Text("Mulai unduh") }
+        Text(notice, color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("AKTIVITAS UNDUHAN", color = Violet, style = MaterialTheme.typography.labelLarge)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(records, key = { it.id }) { item ->
+                Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(item.title, maxLines = 2); Text(item.status, color = Mint, style = MaterialTheme.typography.labelSmall)
+                        if (item.total > 0) {
+                            LinearProgressIndicator(progress = { (item.done.toFloat() / item.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = Violet)
+                            Text(formatBytes(item.done) + " / " + formatBytes(item.total), color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         }
-        Text("Current transfers and completed files are also available in Android's Downloads notification and system download view.", color = Muted, style = MaterialTheme.typography.bodySmall)
     }
 }
 
 @Composable
 private fun PlayerPage(uri: Uri?, onPick: () -> Unit, context: Context) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("MEDIA PLAYER", style = MaterialTheme.typography.labelLarge, color = Violet)
-        Button(onClick = onPick, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.VideoLibrary, null); Spacer(Modifier.width(8.dp)); Text("Choose a video") }
-        if (uri == null) {
-            Box(Modifier.fillMaxWidth().weight(1f).background(Panel, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.PlayCircle, null, tint = Violet, modifier = Modifier.size(64.dp))
-                    Text("Choose a local video to play", color = Muted)
-                }
-            }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("MEDIA PLAYER", color = Violet, style = MaterialTheme.typography.labelLarge)
+        Button(onClick = onPick, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.VideoLibrary, null); Spacer(Modifier.width(8.dp)); Text("Pilih audio atau video") }
+        if (uri == null) Box(Modifier.fillMaxWidth().weight(1f).background(Panel, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.PlayCircle, null, tint = Violet, modifier = Modifier.size(64.dp)); Text("Pilih media dari perangkat", color = Muted) }
         } else {
-            val player = remember(uri) {
-                ExoPlayer.Builder(context).build().apply {
-                    setMediaItem(MediaItem.fromUri(uri))
-                    prepare()
-                    playWhenReady = false
-                }
-            }
+            val player = remember(uri) { ExoPlayer.Builder(context).build().apply { setMediaItem(MediaItem.fromUri(uri)); prepare(); playWhenReady = true } }
             DisposableEffect(player) { onDispose { player.release() } }
-            AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player } }, modifier = Modifier.fillMaxWidth().weight(1f))
+            AndroidView(factory = { ctx -> PlayerView(ctx).apply { player?.let { this.player = it }; useController = true } }, modifier = Modifier.fillMaxWidth().weight(1f))
+            Text(uri.lastPathSegment ?: "Media terpilih", color = Muted)
         }
     }
 }
 
 @Composable
-private fun LibraryPage(onPickVideo: () -> Unit, onPickAudio: () -> Unit) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("MEDIA LIBRARY", style = MaterialTheme.typography.labelLarge, color = Violet)
-        Text("Choose local media using Android's system file picker. Access is limited to files you select.", color = Muted)
-        FeatureRow(Icons.Default.VideoLibrary, "Browse videos", "Choose a video file to play", onPickVideo)
-        FeatureRow(Icons.Default.LibraryMusic, "Browse audio", "Choose an audio file", onPickAudio)
-        Text("More library features—automatic indexing, playlists, and sorting—can be added on top of this foundation.", color = Muted, style = MaterialTheme.typography.bodySmall)
+private fun LibraryPage(onVideo: () -> Unit, onAudio: () -> Unit, onAll: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("PUSTAKA MEDIA", color = Violet, style = MaterialTheme.typography.labelLarge)
+        Text("Pilih media lokal melalui pemilih berkas Android.", color = Muted)
+        FeatureRow(Icons.Default.VideoLibrary, "Video", "Pilih video dari perangkat", onVideo)
+        FeatureRow(Icons.Default.LibraryMusic, "Audio", "Pilih musik dari perangkat", onAudio)
+        FeatureRow(Icons.Default.FolderOpen, "Semua berkas", "Buka pemilih berkas", onAll)
     }
 }
 
 @Composable
-private fun SettingsPage() {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("SETTINGS", style = MaterialTheme.typography.labelLarge, color = Violet)
-        FeatureRow(Icons.Default.Palette, "Appearance", "Virexa uses a dark interface with violet accents") {}
-        FeatureRow(Icons.Default.Security, "Privacy", "No Virexa account or remote profile is required in this foundation") {}
-        FeatureRow(Icons.Default.Info, "About Virexa", "Ultimate+ foundation • Version 1.0.0") {}
-        Text("Advertising is not enabled in this build. Ad network selection and approval are required before monetization.", color = Muted, style = MaterialTheme.typography.bodySmall)
+private fun SettingsPage(bookmarks: Int, history: Int, onClearHistory: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("PENGATURAN", color = Violet, style = MaterialTheme.typography.labelLarge)
+        FeatureRow(Icons.Default.Bookmark, "Bookmark", bookmarks.toString() + " alamat tersimpan") {}
+        FeatureRow(Icons.Default.History, "Riwayat browser", history.toString() + " halaman tersimpan") {}
+        FeatureRow(Icons.Default.DeleteSweep, "Hapus riwayat", "Hapus riwayat lokal", onClearHistory)
+        FeatureRow(Icons.Default.Security, "Privasi", "Bookmark dan riwayat disimpan di perangkat") {}
+        Text("Iklan belum terhubung. Integrasi SDK, konfigurasi dan persetujuan jaringan iklan masih diperlukan.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("Virexa Ultimate+ • Multimedia", color = Muted, style = MaterialTheme.typography.bodySmall)
     }
 }
