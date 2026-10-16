@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -31,6 +32,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import org.json.JSONArray
+import org.json.JSONTokener
 
 private val Ink = Color(0xFF0C0B14)
 private val Panel = Color(0xFF191725)
@@ -124,13 +127,17 @@ private fun VirexaApp() {
                         onDownload = { url ->
                             val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
                             try {
-                                val request = DownloadManager.Request(Uri.parse(normalized))
-                                    .setTitle(Uri.parse(normalized).lastPathSegment ?: "Virexa download")
+                                val parsedUri = Uri.parse(normalized)
+                                val request = DownloadManager.Request(parsedUri)
+                                    .setTitle(parsedUri.lastPathSegment ?: "Virexa download")
                                     .setDescription("Downloading with Virexa")
                                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                                     .setAllowedOverMetered(true)
                                     .setAllowedOverRoaming(false)
-                                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, Uri.parse(normalized).lastPathSegment?.takeIf { it.isNotBlank() } ?: "virexa-download")
+                                val cookie = CookieManager.getInstance().getCookie(normalized)
+                                if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
+                                request.addRequestHeader("User-Agent", System.getProperty("http.agent") ?: "Mozilla/5.0")
+                                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, parsedUri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "virexa-download")
                                 val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
                                 manager.enqueue(request)
                                 message = "Download added. Check Android notifications for progress."
@@ -202,6 +209,7 @@ private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: 
     var pageTitle by remember { mutableStateOf("Ready to browse") }
     var loading by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableIntStateOf(0) }
+    var detectedMedia by remember { mutableStateOf(listOf<String>()) }
 
     fun normalizedAddress(input: String): String {
         val value = input.trim()
@@ -247,6 +255,19 @@ private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: 
         }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
         Text(pageTitle, style = MaterialTheme.typography.labelSmall, color = Muted, maxLines = 1)
+        if (detectedMedia.isNotEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)) {
+                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("MEDIA YANG TERDETEKSI (${detectedMedia.size})", color = Violet, style = MaterialTheme.typography.labelMedium)
+                    detectedMedia.take(5).forEachIndexed { index, mediaUrl ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(Uri.parse(mediaUrl).lastPathSegment ?: "Media ${index + 1}", color = Muted, modifier = Modifier.weight(1f), maxLines = 1)
+                            TextButton(onClick = { onDownload(mediaUrl) }) { Text("Unduh") }
+                        }
+                    }
+                }
+            }
+        }
         key(reloadKey) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
@@ -262,6 +283,18 @@ private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: 
                                 loading = false
                                 pageTitle = view?.title?.takeIf { it.isNotBlank() } ?: pageUrl ?: "Page loaded"
                                 if (!pageUrl.isNullOrBlank()) onUrlChange(pageUrl)
+                                // Detect media URLs exposed by the page itself; this does not bypass DRM.
+                                view?.evaluateJavascript(
+                                    """(function(){var a=[];document.querySelectorAll('video,audio,video source,audio source').forEach(function(e){var u=e.currentSrc||e.src||e.getAttribute('src');if(u)a.push(u)});document.querySelectorAll('a[href]').forEach(function(e){var u=e.href||'';if(/\.(mp4|webm|m4v|mp3|m4a|aac|ogg|wav)(\?|#|$)/i.test(u))a.push(u)});return JSON.stringify([...new Set(a)].filter(function(u){return /^https?:/i.test(u)}).slice(0,20));})()"""
+                                ) { raw ->
+                                    try {
+                                        val parsed = JSONTokener(raw).nextValue()
+                                        val array = JSONArray(parsed as? String ?: "[]")
+                                        detectedMedia = (0 until array.length()).mapNotNull { array.optString(it).takeIf { value -> value.startsWith("http://") || value.startsWith("https://") } }.distinct()
+                                    } catch (_: Exception) {
+                                        detectedMedia = emptyList()
+                                    }
+                                }
                             }
                         }
                         webChromeClient = object : WebChromeClient() {
@@ -271,6 +304,9 @@ private fun BrowserPage(url: String, onUrlChange: (String) -> Unit, onDownload: 
                         }
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.setSupportMultipleWindows(false)
                         setDownloadListener { downloadUrl, _, _, _, _ ->
