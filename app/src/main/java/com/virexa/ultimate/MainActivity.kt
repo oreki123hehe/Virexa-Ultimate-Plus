@@ -202,7 +202,7 @@ private fun BrowserPage(address: String, tabCount: Int, onNewTab: () -> Unit, on
                 }
             }
         }
-        AndroidView(Modifier.fillMaxSize(), factory = { ctx ->
+        AndroidView(factory = { ctx ->
             WebView(ctx).apply {
                 view = this
                 settings.javaScriptEnabled = true
@@ -228,7 +228,7 @@ private fun BrowserPage(address: String, tabCount: Int, onNewTab: () -> Unit, on
                 setDownloadListener { url, _, _, _, _ -> if (!url.isNullOrBlank()) onDownload(url) }
                 loadUrl(normalizeAddress(address))
             }
-        }, update = { view = it })
+        }, modifier = Modifier.fillMaxSize(), update = { webView -> view = webView })
     }
 }
 
